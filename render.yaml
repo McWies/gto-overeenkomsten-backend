@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: gto-overeenkomsten-api
+    env: docker
+    plan: free
+    healthCheckPath: /health
