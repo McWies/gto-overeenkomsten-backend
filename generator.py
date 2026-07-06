@@ -638,7 +638,26 @@ def docx_to_pdf(docx_path, output_dir):
     return pdf_path
 
 
-def format_uurtarief(tarief, reisuur_tekst=None, met_euroteken=False):
+def format_kvk_or_regon(kvk):
+    """
+    Bepaal automatisch of een registratienummer een KvK-nummer of een
+    Pools REGON-nummer is, en zet 'REGON' ervoor als dat het geval is.
+
+    KvK-nummer:   8 cijfers (Nederland)
+    REGON-nummer: 9 cijfers (Poolse rechtspersoon) of 14 cijfers (Pools filiaal)
+
+    Als het nummer al met 'REGON' begint wordt het ongewijzigd teruggegeven.
+    Als het geen zuiver getal is (bijv. al een prefix zoals 'KvK') ook ongewijzigd.
+    """
+    if not kvk:
+        return kvk
+    s = str(kvk).strip()
+    if s.upper().startswith('REGON'):
+        return s  # al correct gelabeld
+    digits_only = ''.join(c for c in s if c.isdigit())
+    if len(digits_only) in (9, 14) and digits_only == s.replace(' ', ''):
+        return f"REGON {digits_only}"
+    return s
     """
     Formatteer het uurtarief veld: altijd 2 decimalen, plus optioneel reisuur erachter.
 
@@ -715,7 +734,7 @@ def build_field_data(entiteit, monteur, klant, project, tekenbevoegde,
         "monteur_naam": monteur["naam"],
         "monteur_handelsnaam": monteur["handelsnaam"],
         "monteur_adres": monteur.get("adres", ""),
-        "monteur_kvk": monteur["kvk"],
+        "monteur_kvk": format_kvk_or_regon(monteur["kvk"]),
         "opdrachtomschrijving": opdrachtomschrijving,
         "project_nr": project["nr"],
         "project_naam": project.get("naam", ""),
