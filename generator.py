@@ -547,6 +547,40 @@ def build_field_data(entiteit, monteur, klant, project, tekenbevoegde,
     return zzp_data, klant_data
 
 
+def validate_required_fields(entiteit, monteurs, klant, project, tekenbevoegde, opdrachtomschrijving):
+    """
+    Controleer of alle verplichte velden aanwezig zijn voor een volledige overeenkomst.
+    Retourneert een lijst van ontbrekende velden zodat het platform de gebruiker
+    gericht om aanvulling kan vragen.
+    """
+    missing = []
+
+    if not tekenbevoegde or not str(tekenbevoegde).strip():
+        missing.append({"veld": "tekenbevoegde", "label": "Tekenbevoegde van de klant", "context": klant.get("naam", "")})
+
+    for key, label in [("naam", "Klantnaam"), ("adres", "Klantadres"), ("kvk", "KvK-nummer klant")]:
+        if not klant.get(key, "").strip():
+            missing.append({"veld": f"klant.{key}", "label": label, "context": klant.get("naam", "")})
+
+    for key, label in [("nr", "Projectnummer"), ("naam", "Projectnaam"), ("werkadres", "Werkadres project")]:
+        if not project.get(key, "").strip():
+            missing.append({"veld": f"project.{key}", "label": label, "context": project.get("naam", project.get("nr", ""))})
+
+    if not opdrachtomschrijving or not str(opdrachtomschrijving).strip():
+        missing.append({"veld": "opdrachtomschrijving", "label": "Opdrachtomschrijving", "context": project.get("naam", "")})
+
+    for m in monteurs:
+        mnaam = m.get("naam", "(naam onbekend)")
+        for key, label in [("naam", "Naam"), ("handelsnaam", "Handelsnaam"), ("kvk", "KvK-nummer")]:
+            if not m.get(key, "").strip():
+                missing.append({"veld": f"monteur.{key}", "label": f"{label} monteur", "context": mnaam, "monteur_id": m.get("id")})
+        if not m.get("persnr", "").strip():
+            entiteit_label = "GTO West" if entiteit == "west" else "GTO Nederland"
+            missing.append({"veld": "monteur.persnr", "label": f"Persoonsnummer ({entiteit_label})", "context": mnaam, "monteur_id": m.get("id")})
+
+    return missing
+
+
 def generate_full_package(entiteit, monteurs, klant, project, tekenbevoegde,
                            startdatum_nl, startdatum_iso, handtekendatum_nl,
                            tarieven_per_monteur, opdrachtomschrijving, output_zip_path):
