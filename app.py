@@ -159,6 +159,7 @@ def generate():
             handtekendatum_nl=data["handtekendatum_nl"],
             tarieven_per_monteur=tarieven,
             opdrachtomschrijving=data["opdrachtomschrijving"],
+            artikelen=data.get("artikelen", {}),
             output_zip_path=str(zip_path),
         )
 
