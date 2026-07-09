@@ -1,5 +1,6 @@
 """
 GTO Overeenkomst Generator - Definitieve versie
+Bevat: SDT-vulling, handtekening-injectie, artikel-injectie, REGON-detectie
 """
 
 import re
@@ -215,8 +216,87 @@ def inject_signature_image(work_unpack_dir, entiteit):
             shutil.copy(sig_path, target_path)
 
 
+# ── Artikel-injectie ───────────────────────────────────────────────────────────
+def artikel_to_xml(artikel):
+    """Converteer een artikel-dict naar Word XML paragrafen."""
+    xml_parts = []
+    titel = escape_xml(f"{artikel['nr']}.  {artikel['titel']}")
+    xml_parts.append(
+        '<w:p><w:pPr><w:spacing w:before="120" w:after="60"/></w:pPr>'
+        '<w:r><w:rPr><w:b/><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+        '<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
+        f'<w:t>{titel}</w:t></w:r></w:p>'
+    )
+    for sub in artikel.get('subaartikelen', []):
+        tekst = escape_xml(sub['tekst'])
+        xml_parts.append(
+            '<w:p><w:pPr><w:ind w:left="360"/><w:spacing w:before="60" w:after="60"/></w:pPr>'
+            '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+            '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
+            f'<w:t xml:space="preserve">{tekst}</w:t></w:r></w:p>'
+        )
+    return ''.join(xml_parts)
+
+
+def inject_artikelen(xml_content, artikelen, template_key):
+    """
+    Vervang de vaste artikel-paragrafen door de opgegeven artikelen.
+    Gebruikt de EERSTE artikel-titel als anker om de beginpositie te vinden,
+    en de LAATSTE tabel als anker voor de eindpositie (handtekentabel).
+    Dit is robuust omdat het niet afhangt van HANDTEKENING-labels die soms
+    in datatabellen staan en daardoor op de verkeerde plek kunnen matchen.
+    """
+    if not artikelen:
+        return xml_content
+
+    nieuwe_artikel_xml = ''.join(artikel_to_xml(a) for a in artikelen)
+    eerste_titel = artikelen[0].get('titel', '') if artikelen else ''
+
+    # Vind de EERSTE artikel-header paragraaf in het document
+    para_pattern = re.compile(r'<w:p\b[^>]*>(?:(?!</w:p>).)*?</w:p>', re.DOTALL)
+    paragraphs = list(para_pattern.finditer(xml_content))
+
+    artikel_begin_pos = None
+
+    # Probeer eerst de exacte titel van het eerste artikel te vinden
+    for m in paragraphs:
+        texts = re.findall(r'<w:t[^>]*>([^<]*)</w:t>', m.group())
+        full = ''.join(texts).strip()
+        if eerste_titel and full == eerste_titel:
+            artikel_begin_pos = m.start()
+            break
+
+    # Fallback voor ZZP: zoek puntjes-lijn en begin ACHTER die lijn
+    if artikel_begin_pos is None:
+        for m in paragraphs:
+            texts = re.findall(r'<w:t[^>]*>([^<]*)</w:t>', m.group())
+            full = ''.join(texts).strip()
+            if '\u2026' in full or '……' in full or '......' in full:
+                artikel_begin_pos = m.end()
+                break
+
+    if artikel_begin_pos is None:
+        return xml_content  # Veilig: ongewijzigd laten
+
+    # Vind de LAATSTE tabel in het document (altijd de handtekentabel)
+    tbl_positions = [m.start() for m in re.finditer(r'<w:tbl>', xml_content)]
+    if not tbl_positions:
+        return xml_content
+    handteken_tbl_pos = tbl_positions[-1]
+
+    if artikel_begin_pos >= handteken_tbl_pos:
+        return xml_content  # Sanity check
+
+    return (
+        xml_content[:artikel_begin_pos] +
+        '\n' + nieuwe_artikel_xml + '\n' +
+        xml_content[handteken_tbl_pos:]
+    )
+
+
 # ── Generator ──────────────────────────────────────────────────────────────────
-def generate_docx(template_key, data, output_path):
+def generate_docx(template_key, data, output_path, artikelen=None):
+    """Genereer een ingevuld .docx bestand. artikelen optioneel."""
     template_path = TEMPLATES_DIR / TEMPLATE_FILES[template_key]
     sdt_map = SDT_MAPS[template_key]
     work_unpack = WORK_DIR / f"unpack_{template_key}_{os.getpid()}_{id(data)}"
@@ -232,6 +312,8 @@ def generate_docx(template_key, data, output_path):
         font_size = 22 if field_name in GROTE_FONT_VELDEN else 14
         blocks = find_balanced_sdt_blocks(xml_content)
         xml_content = fill_sdt_content(xml_content, idx, value, blocks_cache=blocks, font_size=font_size)
+    if artikelen:
+        xml_content = inject_artikelen(xml_content, artikelen, template_key)
     with open(doc_xml_path, "w", encoding="utf-8") as f:
         f.write(xml_content)
     for rel_path, tag_pat in [
@@ -251,11 +333,25 @@ def generate_docx(template_key, data, output_path):
 
 
 def docx_to_pdf(docx_path, output_dir):
-    subprocess.run(
-        ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(output_dir), str(docx_path)],
-        check=True, capture_output=True, timeout=60
+    """Converteer docx naar pdf via LibreOffice. Geeft pad terug naar de pdf."""
+    docx_path = Path(docx_path)
+    output_dir = Path(output_dir)
+    result = subprocess.run(
+        ["soffice", "--headless", "--convert-to", "pdf",
+         "--outdir", str(output_dir), str(docx_path)],
+        capture_output=True, timeout=90
     )
-    return Path(output_dir) / (Path(docx_path).stem + ".pdf")
+    pdf_path = output_dir / (docx_path.stem + ".pdf")
+    if not pdf_path.exists():
+        # LibreOffice kan soms de naam aanpassen; zoek het nieuwste PDF-bestand
+        pdfs = sorted(output_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if pdfs:
+            return pdfs[0]
+        raise FileNotFoundError(
+            f"PDF niet gevonden na conversie van {docx_path.name}. "
+            f"LibreOffice stdout: {result.stdout.decode(errors='replace')[:200]}"
+        )
+    return pdf_path
 
 
 # ── Hulpfuncties ───────────────────────────────────────────────────────────────
@@ -364,37 +460,53 @@ def validate_required_fields(entiteit, monteurs, klant, project, tekenbevoegde, 
 
 def generate_full_package(entiteit, monteurs, klant, project, tekenbevoegde,
                           startdatum_nl, startdatum_iso, handtekendatum_nl,
-                          tarieven_per_monteur, opdrachtomschrijving, output_zip_path):
+                          tarieven_per_monteur, opdrachtomschrijving, output_zip_path,
+                          artikelen=None):
+    """
+    Genereer ZIP met Word+PDF voor alle monteurs.
+    artikelen: dict met keys '{entiteit}_zzp' en '{entiteit}_klant',
+    elk een lijst van artikel-dicts. Als leeg: originele template-artikelen.
+    """
     template_zzp_key = f"{entiteit}_zzp"
     template_klant_key = f"{entiteit}_klant"
     tmp_dir = WORK_DIR / f"package_{os.getpid()}_{id(monteurs)}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     multi = len(monteurs) > 1
-    with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for monteur in monteurs:
-            tarieven = tarieven_per_monteur.get(monteur["id"], {})
-            zzp_data, klant_data = build_field_data(
-                entiteit=entiteit, monteur=monteur, klant=klant, project=project,
-                tekenbevoegde=tekenbevoegde, startdatum_nl=startdatum_nl,
-                handtekendatum_nl=handtekendatum_nl,
-                uurtarief_zzp=tarieven.get("zzp", ""),
-                uurtarief_klant=tarieven.get("klant", ""),
-                reisuur_tekst=tarieven.get("reisuur", ""),
-                opdrachtomschrijving=opdrachtomschrijving,
-            )
-            persnr = monteur["persnr"]
-            zzp_fn = build_filename("zzp", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
-            kl_fn = build_filename("klant", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
-            zzp_docx = tmp_dir / f"{zzp_fn}.docx"
-            kl_docx = tmp_dir / f"{kl_fn}.docx"
-            generate_docx(template_zzp_key, zzp_data, zzp_docx)
-            generate_docx(template_klant_key, klant_data, kl_docx)
-            zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
-            kl_pdf = docx_to_pdf(kl_docx, tmp_dir)
-            prefix = f"{monteur['naam']}/" if multi else ""
-            zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
-            zf.write(zzp_pdf, f"{prefix}{zzp_fn}.pdf")
-            zf.write(kl_docx, f"{prefix}{kl_fn}.docx")
-            zf.write(kl_pdf, f"{prefix}{kl_fn}.pdf")
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    zzp_artikelen = (artikelen or {}).get(template_zzp_key) or \
+                    (artikelen or {}).get("zzp") or []
+    kl_artikelen  = (artikelen or {}).get(template_klant_key) or \
+                    (artikelen or {}).get("klant") or []
+
+    try:
+        with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for monteur in monteurs:
+                tarieven = tarieven_per_monteur.get(monteur["id"], {})
+                zzp_data, klant_data = build_field_data(
+                    entiteit=entiteit, monteur=monteur, klant=klant, project=project,
+                    tekenbevoegde=tekenbevoegde, startdatum_nl=startdatum_nl,
+                    handtekendatum_nl=handtekendatum_nl,
+                    uurtarief_zzp=tarieven.get("zzp", ""),
+                    uurtarief_klant=tarieven.get("klant", ""),
+                    reisuur_tekst=tarieven.get("reisuur", ""),
+                    opdrachtomschrijving=opdrachtomschrijving,
+                )
+                persnr = monteur["persnr"]
+                zzp_fn = build_filename("zzp", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
+                kl_fn  = build_filename("klant", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
+                zzp_docx = tmp_dir / f"{zzp_fn}.docx"
+                kl_docx  = tmp_dir / f"{kl_fn}.docx"
+                generate_docx(template_zzp_key, zzp_data, zzp_docx,
+                              artikelen=zzp_artikelen if zzp_artikelen else None)
+                generate_docx(template_klant_key, klant_data, kl_docx,
+                              artikelen=kl_artikelen if kl_artikelen else None)
+                zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
+                kl_pdf  = docx_to_pdf(kl_docx, tmp_dir)
+                prefix = f"{monteur['naam']}/" if multi else ""
+                zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
+                zf.write(zzp_pdf,  f"{prefix}{zzp_fn}.pdf")
+                zf.write(kl_docx,  f"{prefix}{kl_fn}.docx")
+                zf.write(kl_pdf,   f"{prefix}{kl_fn}.pdf")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return output_zip_path
