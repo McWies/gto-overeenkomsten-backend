@@ -218,23 +218,61 @@ def inject_signature_image(work_unpack_dir, entiteit):
 
 # ── Artikel-injectie ───────────────────────────────────────────────────────────
 def artikel_to_xml(artikel):
-    """Converteer een artikel-dict naar Word XML paragrafen."""
+    """
+    Converteer een artikel-dict naar Word XML paragrafen met correcte nummering.
+    Opmaak:
+    - Artikel-header: vetgedrukt Arial 9pt, bijv. '1.  De opdracht'
+    - Sub-artikelen: Arial 8pt, ingesprongen, genummerd als '1.1  tekst...'
+    - Opsommingspunten (streepje of letter a./b./c.): iets dieper ingesprongen
+    """
+    import re as _re
+    art_nr = artikel['nr']
     xml_parts = []
-    titel = escape_xml(f"{artikel['nr']}.  {artikel['titel']}")
+
+    # Artikel-header (vetgedrukt)
+    titel = escape_xml(f"{art_nr}.  {artikel['titel']}")
     xml_parts.append(
-        '<w:p><w:pPr><w:spacing w:before="120" w:after="60"/></w:pPr>'
+        '<w:p><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>'
         '<w:r><w:rPr><w:b/><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
         '<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
         f'<w:t>{titel}</w:t></w:r></w:p>'
     )
-    for sub in artikel.get('subaartikelen', []):
-        tekst = escape_xml(sub['tekst'])
-        xml_parts.append(
-            '<w:p><w:pPr><w:ind w:left="360"/><w:spacing w:before="60" w:after="60"/></w:pPr>'
-            '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
-            '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
-            f'<w:t xml:space="preserve">{tekst}</w:t></w:r></w:p>'
+
+    for i, sub in enumerate(artikel.get('subaartikelen', []), 1):
+        raw_tekst = sub['tekst']
+
+        # Detecteer of dit een opsommingspunt is (begint met streepje, letter+punt, of 'a.'/'b.')
+        is_opsomming = bool(
+            _re.match(r'^[-–—]\s', raw_tekst) or   # streepje
+            _re.match(r'^[a-z]\.\s', raw_tekst) or            # a. b. c.
+            _re.match(r'^[A-Z]\.\s', raw_tekst)               # A. B. C.
         )
+
+        if is_opsomming:
+            # Opsommingspunt: dieper ingesprongen, geen extra nummering
+            tekst = escape_xml(raw_tekst)
+            xml_parts.append(
+                '<w:p><w:pPr><w:ind w:left="720" w:hanging="360"/>'
+                '<w:spacing w:before="40" w:after="40"/></w:pPr>'
+                '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+                '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
+                f'<w:t xml:space="preserve">{tekst}</w:t></w:r></w:p>'
+            )
+        else:
+            # Normaal sub-artikel met nummering: art_nr.i
+            nummer = escape_xml(f"{art_nr}.{i}")
+            tekst = escape_xml(raw_tekst)
+            xml_parts.append(
+                '<w:p><w:pPr><w:ind w:left="540" w:hanging="360"/>'
+                '<w:spacing w:before="60" w:after="60"/></w:pPr>'
+                '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+                '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
+                f'<w:t xml:space="preserve">{nummer}  </w:t></w:r>'
+                '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
+                '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
+                f'<w:t xml:space="preserve">{tekst}</w:t></w:r></w:p>'
+            )
+
     return ''.join(xml_parts)
 
 
