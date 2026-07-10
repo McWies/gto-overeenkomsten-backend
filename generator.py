@@ -220,10 +220,8 @@ def inject_signature_image(work_unpack_dir, entiteit):
 def artikel_to_xml(artikel):
     """
     Converteer een artikel-dict naar Word XML paragrafen met correcte nummering.
-    Opmaak:
-    - Artikel-header: vetgedrukt Arial 9pt, bijv. '1.  De opdracht'
-    - Sub-artikelen: Arial 8pt, ingesprongen, genummerd als '1.1  tekst...'
-    - Opsommingspunten (streepje of letter a./b./c.): iets dieper ingesprongen
+    Sub-artikelen hebben een 'type' veld: 'numbered' (telt mee) of 'list' (opsomming).
+    Backward compatible: als 'type' ontbreekt, wordt auto-detectie gebruikt.
     """
     import re as _re
     art_nr = artikel['nr']
@@ -238,19 +236,22 @@ def artikel_to_xml(artikel):
         f'<w:t>{titel}</w:t></w:r></w:p>'
     )
 
-    for i, sub in enumerate(artikel.get('subaartikelen', []), 1):
+    LIJST_PATS = [
+        _re.compile(r'^[-\u2013\u2014]\s'),
+        _re.compile(r'^[a-zA-Z]\.[\s\)]'),
+        _re.compile(r'^[a-zA-Z]\)\s'),
+    ]
+
+    nummer = 1
+    for sub in artikel.get('subaartikelen', []):
         raw_tekst = sub['tekst']
+        tekst = escape_xml(raw_tekst)
 
-        # Detecteer of dit een opsommingspunt is (begint met streepje, letter+punt, of 'a.'/'b.')
-        is_opsomming = bool(
-            _re.match(r'^[-–—]\s', raw_tekst) or   # streepje
-            _re.match(r'^[a-z]\.\s', raw_tekst) or            # a. b. c.
-            _re.match(r'^[A-Z]\.\s', raw_tekst)               # A. B. C.
-        )
+        sub_type = sub.get('type', None)
+        if sub_type is None:
+            sub_type = 'list' if any(p.match(raw_tekst) for p in LIJST_PATS) else 'numbered'
 
-        if is_opsomming:
-            # Opsommingspunt: dieper ingesprongen, geen extra nummering
-            tekst = escape_xml(raw_tekst)
+        if sub_type == 'list':
             xml_parts.append(
                 '<w:p><w:pPr><w:ind w:left="720" w:hanging="360"/>'
                 '<w:spacing w:before="40" w:after="40"/></w:pPr>'
@@ -259,23 +260,20 @@ def artikel_to_xml(artikel):
                 f'<w:t xml:space="preserve">{tekst}</w:t></w:r></w:p>'
             )
         else:
-            # Normaal sub-artikel met nummering: art_nr.i
-            nummer = escape_xml(f"{art_nr}.{i}")
-            tekst = escape_xml(raw_tekst)
+            num_label = escape_xml(f"{art_nr}.{nummer}")
             xml_parts.append(
                 '<w:p><w:pPr><w:ind w:left="540" w:hanging="360"/>'
                 '<w:spacing w:before="60" w:after="60"/></w:pPr>'
                 '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
                 '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
-                f'<w:t xml:space="preserve">{nummer}  </w:t></w:r>'
+                f'<w:t xml:space="preserve">{num_label}  </w:t></w:r>'
                 '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
                 '<w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr>'
                 f'<w:t xml:space="preserve">{tekst}</w:t></w:r></w:p>'
             )
+            nummer += 1
 
     return ''.join(xml_parts)
-
-
 def inject_artikelen(xml_content, artikelen, template_key):
     """
     Vervang de vaste artikel-paragrafen door de opgegeven artikelen.
