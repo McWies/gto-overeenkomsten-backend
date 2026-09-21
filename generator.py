@@ -217,20 +217,24 @@ def inject_signature_image(work_unpack_dir, entiteit):
 
 
 # ── Artikel-injectie ───────────────────────────────────────────────────────────
-def artikel_to_xml(artikel):
+def artikel_to_xml(artikel, eerste=False, template_key=''):
     """
-    Converteer een artikel-dict naar Word XML paragrafen met correcte nummering.
-    Sub-artikelen hebben een 'type' veld: 'numbered' (telt mee) of 'list' (opsomming).
-    Backward compatible: als 'type' ontbreekt, wordt auto-detectie gebruikt.
+    Converteer een artikel-dict naar Word XML paragrafen.
+    eerste=True: voeg pageBreakBefore toe aan de header voor klant-templates.
     """
     import re as _re
     art_nr = artikel['nr']
     xml_parts = []
 
-    # Artikel-header (vetgedrukt)
+    # Artikel-header (vetgedrukt) — met optioneel pagina-einde voor het eerste artikel
     titel = escape_xml(f"{art_nr}.  {artikel['titel']}")
+    if eerste and 'klant' in template_key:
+        pPr = '<w:pPr><w:pageBreakBefore/><w:spacing w:before="160" w:after="60"/></w:pPr>'
+    else:
+        pPr = '<w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>'
+
     xml_parts.append(
-        '<w:p><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>'
+        f'<w:p>{pPr}'
         '<w:r><w:rPr><w:b/><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>'
         '<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr>'
         f'<w:t>{titel}</w:t></w:r></w:p>'
@@ -285,7 +289,10 @@ def inject_artikelen(xml_content, artikelen, template_key):
     if not artikelen:
         return xml_content
 
-    nieuwe_artikel_xml = ''.join(artikel_to_xml(a) for a in artikelen)
+    nieuwe_artikel_xml = ''.join(
+        artikel_to_xml(a, eerste=(i == 0), template_key=template_key)
+        for i, a in enumerate(artikelen)
+    )
     eerste_titel = artikelen[0].get('titel', '') if artikelen else ''
 
     # Vind de EERSTE artikel-header paragraaf in het document
@@ -323,6 +330,8 @@ def inject_artikelen(xml_content, artikelen, template_key):
     if artikel_begin_pos >= handteken_tbl_pos:
         return xml_content  # Sanity check
 
+    # Het pagina-einde voor klant-overeenkomsten zit in de eerste artikel-header
+    # via pageBreakBefore in artikel_to_xml (eerste=True).
     return (
         xml_content[:artikel_begin_pos] +
         '\n' + nieuwe_artikel_xml + '\n' +
@@ -333,27 +342,55 @@ def inject_artikelen(xml_content, artikelen, template_key):
 # ── Generator ──────────────────────────────────────────────────────────────────
 def compact_datatabel(xml_content, template_key):
     """
-    Verklein de regelafstand in de datatabel (eerste tabel) van klant-overeenkomsten
-    van 360 (1.5× regelafstand) naar 280 (~1.16×). Dit geeft ~2.8cm extra ruimte
-    zodat de handtekenvakken op pagina 1 blijven, ook bij langere omschrijvingen.
-    Alleen van toepassing op klant-templates; ZZP-templates worden niet aangepast.
+    Voor klant-overeenkomsten:
+    1. Verwijder de floating-tabel positionering (w:tblpPr) zodat de datatabel
+       in de normale tekststroom valt.
+    2. Verklein de regelafstand van 360 naar 280 voor compactere weergave.
+    3. Voeg pageBreakBefore toe aan de eerste artikel-header zodat de voorwaarden
+       altijd op pagina 2 beginnen, ongeacht de lengte van de omschrijving.
+    Alleen van toepassing op klant-templates.
     """
     if 'klant' not in template_key:
         return xml_content
 
-    # Vind de eerste tabel (datatabel) en pas alleen daarin de spacing aan
     tbl_start = xml_content.find('<w:tbl>')
     tbl_end = xml_content.find('</w:tbl>', tbl_start) + len('</w:tbl>')
     if tbl_start < 0 or tbl_end < 0:
         return xml_content
 
     datatabel = xml_content[tbl_start:tbl_end]
-    # Verklein line="360" naar line="280" (alleen in de datatabel, niet in de rest)
-    datatabel_compact = datatabel.replace(
+
+    # 1. Verwijder floating-tabel positionering
+    datatabel = re.sub(r'<w:tblpPr[^/]*/>', '', datatabel)
+
+    # 2. Compacteer regelafstand
+    datatabel = datatabel.replace(
         'w:line="360" w:lineRule="auto"',
         'w:line="280" w:lineRule="auto"'
     )
-    return xml_content[:tbl_start] + datatabel_compact + xml_content[tbl_end:]
+
+    xml_content = xml_content[:tbl_start] + datatabel + xml_content[tbl_end:]
+
+    # 3. Voeg pageBreakBefore toe aan de eerste artikel-paragraaf NA de tabel
+    # Zoek de eerste vetgedrukte paragraaf na de tabel (dat is de artikel-header)
+    after_tbl = xml_content[tbl_end:]
+    # Zoek eerste <w:b/> in een paragraaf na de tabel — dat is de artikel-header
+    first_bold_para = re.search(
+        r'(<w:p\b[^>]*>)(<w:pPr>)(.*?</w:pPr>)',
+        after_tbl, re.DOTALL
+    )
+    if first_bold_para and '<w:b' in (after_tbl[first_bold_para.start():first_bold_para.start()+500]):
+        # Voeg pageBreakBefore toe aan de pPr van deze paragraaf
+        old_para_start = tbl_end + first_bold_para.start()
+        old_pPr = first_bold_para.group(0)
+        new_pPr = old_pPr.replace(
+            '<w:pPr>',
+            '<w:pPr><w:pageBreakBefore/>'
+        )
+        if old_pPr != new_pPr:
+            xml_content = xml_content[:old_para_start] + new_pPr + xml_content[old_para_start + len(old_pPr):]
+
+    return xml_content
 
 
 def generate_docx(template_key, data, output_path, artikelen=None):
