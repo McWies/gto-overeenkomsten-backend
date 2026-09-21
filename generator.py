@@ -331,6 +331,31 @@ def inject_artikelen(xml_content, artikelen, template_key):
 
 
 # ── Generator ──────────────────────────────────────────────────────────────────
+def compact_datatabel(xml_content, template_key):
+    """
+    Verklein de regelafstand in de datatabel (eerste tabel) van klant-overeenkomsten
+    van 360 (1.5× regelafstand) naar 280 (~1.16×). Dit geeft ~2.8cm extra ruimte
+    zodat de handtekenvakken op pagina 1 blijven, ook bij langere omschrijvingen.
+    Alleen van toepassing op klant-templates; ZZP-templates worden niet aangepast.
+    """
+    if 'klant' not in template_key:
+        return xml_content
+
+    # Vind de eerste tabel (datatabel) en pas alleen daarin de spacing aan
+    tbl_start = xml_content.find('<w:tbl>')
+    tbl_end = xml_content.find('</w:tbl>', tbl_start) + len('</w:tbl>')
+    if tbl_start < 0 or tbl_end < 0:
+        return xml_content
+
+    datatabel = xml_content[tbl_start:tbl_end]
+    # Verklein line="360" naar line="280" (alleen in de datatabel, niet in de rest)
+    datatabel_compact = datatabel.replace(
+        'w:line="360" w:lineRule="auto"',
+        'w:line="280" w:lineRule="auto"'
+    )
+    return xml_content[:tbl_start] + datatabel_compact + xml_content[tbl_end:]
+
+
 def generate_docx(template_key, data, output_path, artikelen=None):
     """Genereer een ingevuld .docx bestand. artikelen optioneel."""
     template_path = TEMPLATES_DIR / TEMPLATE_FILES[template_key]
@@ -348,6 +373,9 @@ def generate_docx(template_key, data, output_path, artikelen=None):
         font_size = 22 if field_name in GROTE_FONT_VELDEN else 14
         blocks = find_balanced_sdt_blocks(xml_content)
         xml_content = fill_sdt_content(xml_content, idx, value, blocks_cache=blocks, font_size=font_size)
+    # Comprimeer de datatabel in klant-overeenkomsten zodat de handtekenvakken
+    # op pagina 1 blijven, ook bij langere opdrachtomschrijvingen
+    xml_content = compact_datatabel(xml_content, template_key)
     if artikelen:
         xml_content = inject_artikelen(xml_content, artikelen, template_key)
     with open(doc_xml_path, "w", encoding="utf-8") as f:
