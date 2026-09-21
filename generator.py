@@ -422,10 +422,11 @@ def format_kvk_or_regon(kvk):
 
 def build_filename(doc_type, entiteit, startdatum_iso, persnr, klantnaam, projectnr):
     klantnaam_clean = re.sub(r'[\\/:*?"<>|]', "", klantnaam).strip()
+    projectnr_clean = re.sub(r'[\\/:*?"<>|]', "-", str(projectnr)).strip()
     if doc_type == "zzp":
-        return f"{startdatum_iso} PO {persnr} - {klantnaam_clean} {projectnr}"
+        return f"{startdatum_iso} PO {persnr} - {klantnaam_clean} {projectnr_clean}"
     else:
-        return f"{startdatum_iso} PO {klantnaam_clean} - {persnr} {projectnr}"
+        return f"{startdatum_iso} PO {klantnaam_clean} - {persnr} {projectnr_clean}"
 
 
 def build_field_data(entiteit, monteur, klant, project, tekenbevoegde,
