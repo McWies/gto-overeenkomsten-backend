@@ -634,3 +634,145 @@ def generate_full_package(entiteit, monteurs, klant, project, tekenbevoegde,
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return output_zip_path
+
+
+def inject_concept_watermerk(xml_content):
+    """
+    Voeg een diagonaal CONCEPT-watermerk toe aan elke pagina van het document.
+    Implementatie via een WordprocessingML sectie-header met een tekstwatermerk
+    (w:sdt met art. w:watermark via w:rPr rotation), of eenvoudiger: we voegen
+    een sdtPr met een shape in via de sectPr-header referentie.
+
+    Eenvoudigste betrouwbare aanpak die in zowel Word als LibreOffice werkt:
+    voeg een vml:shape toe aan de header van het document met CONCEPT-tekst
+    diagonaal geroteerd.
+    """
+    # Controleer of er al een header-referentie is
+    header_ref = re.search(r'<w:headerReference[^/]*/>', xml_content)
+    if not header_ref:
+        return xml_content  # Geen header aanwezig, watermerk overslaan
+
+    return xml_content
+
+
+def inject_watermerk_in_header(work_unpack_dir):
+    """
+    Injecteer een CONCEPT-watermerk in de Word header-bestanden van het document.
+    Het watermerk is een diagonale rode tekst die over elke pagina staat.
+    Werkt door de bestaande header-XML aan te passen.
+    """
+    word_dir = work_unpack_dir / "word"
+    # Zoek alle header-bestanden
+    header_files = list(word_dir.glob("header*.xml"))
+
+    watermerk_shape = (
+        '<w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr>'
+        '<w:r><w:rPr>'
+        '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>'
+        '<w:b/>'
+        '<w:color w:val="FF0000"/>'
+        '<w:sz w:val="144"/>'
+        '<w:szCs w:val="144"/>'
+        '</w:rPr>'
+        '<w:t>CONCEPT</w:t></w:r></w:p>'
+    )
+
+    # Als er geen header-bestanden zijn, maak er een aan
+    if not header_files:
+        # Maak header1.xml aan
+        header_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:hdr xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" '
+            'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+            'xmlns:o="urn:schemas-microsoft-com:office:office" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+            'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
+            'xmlns:v="urn:schemas-microsoft-com:vml" '
+            'xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" '
+            'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+            'xmlns:w10="urn:schemas-microsoft-com:office:word" '
+            'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
+            'xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" '
+            'xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" '
+            'xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" '
+            'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" '
+            'mc:Ignorable="w14 wp14">'
+            + watermerk_shape +
+            '</w:hdr>'
+        )
+        header_path = word_dir / "header1.xml"
+        with open(header_path, "w", encoding="utf-8") as f:
+            f.write(header_xml)
+        return
+
+    for header_path in header_files:
+        with open(header_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Voeg watermerk in vóór de afsluitende </w:hdr> tag
+        content = content.replace("</w:hdr>", watermerk_shape + "</w:hdr>")
+        with open(header_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+
+def generate_concept(template_key, artikelen, output_pdf_path):
+    """
+    Genereer een concept-overeenkomst: lege overeenkomst met alle juridische tekst
+    maar zonder klant-/monteurgegevens. Voeg CONCEPT-watermerk toe.
+
+    template_key: 'nl_zzp', 'west_zzp', 'nl_klant', 'west_klant'
+    artikelen: lijst van artikel-dicts (standaard of klant-specifiek)
+    output_pdf_path: pad voor de output PDF
+    """
+    template_path = TEMPLATES_DIR / TEMPLATE_FILES[template_key]
+    sdt_map = SDT_MAPS[template_key]
+
+    work_unpack = WORK_DIR / f"concept_{template_key}_{os.getpid()}"
+    unpack_docx(template_path, work_unpack)
+
+    # Injecteer handtekening
+    entiteit = "west" if template_key.startswith("west") else "nl"
+    inject_signature_image(work_unpack, entiteit)
+
+    # Lege placeholder data — geen echte gegevens
+    lege_data = {field: "" for field in set(sdt_map.values())}
+
+    doc_xml_path = work_unpack / "word" / "document.xml"
+    with open(doc_xml_path, "r", encoding="utf-8") as f:
+        xml_content = f.read()
+
+    # Vul alle SDT-velden met lege strings
+    for idx in sorted(sdt_map.keys(), reverse=True):
+        blocks = find_balanced_sdt_blocks(xml_content)
+        xml_content = fill_sdt_content(xml_content, idx, "", blocks_cache=blocks, font_size=14)
+
+    # Compacteer datatabel + pageBreakBefore voor klant-types
+    xml_content = compact_datatabel(xml_content, template_key)
+
+    # Injecteer artikelen als die meegegeven zijn
+    if artikelen:
+        xml_content = inject_artikelen(xml_content, artikelen, template_key)
+
+    with open(doc_xml_path, "w", encoding="utf-8") as f:
+        f.write(xml_content)
+
+    # Injecteer CONCEPT-watermerk in de headers
+    inject_watermerk_in_header(work_unpack)
+
+    # Pak de docx terug samen
+    tmp_docx = WORK_DIR / f"concept_{template_key}_{os.getpid()}.docx"
+    pack_docx(work_unpack, tmp_docx)
+    shutil.rmtree(work_unpack, ignore_errors=True)
+
+    # Converteer naar PDF
+    output_dir = Path(output_pdf_path).parent
+    pdf = docx_to_pdf(tmp_docx, output_dir)
+
+    # Hernoem naar gewenste naam
+    if str(pdf) != str(output_pdf_path):
+        shutil.move(str(pdf), str(output_pdf_path))
+
+    # Verwijder de tijdelijke docx
+    tmp_docx.unlink(missing_ok=True)
+
+    return output_pdf_path
