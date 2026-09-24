@@ -670,7 +670,7 @@ def inject_watermerk_in_header(work_unpack_dir):
         '<w:r><w:rPr>'
         '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>'
         '<w:b/>'
-        '<w:color w:val="FF0000"/>'
+        '<w:color w:val="AAAAAA"/>'
         '<w:sz w:val="144"/>'
         '<w:szCs w:val="144"/>'
         '</w:rPr>'
