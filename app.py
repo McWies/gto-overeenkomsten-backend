@@ -178,54 +178,6 @@ def generate():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/concept", methods=["POST"])
-def concept():
-    """
-    Genereer een concept-overeenkomst: leeg document met alle juridische tekst
-    maar zonder klant-/monteurgegevens. Met CONCEPT-watermerk.
-
-    Verwacht JSON:
-    {
-      "template_key": "nl_zzp" | "west_zzp" | "nl_klant" | "west_klant",
-      "artikelen": [...]   // optioneel, standaard of klant-specifiek
-    }
-    Retourneert: PDF-bestand
-    """
-    try:
-        data = request.get_json(force=True)
-        template_key = data.get("template_key")
-        if template_key not in ("nl_zzp", "west_zzp", "nl_klant", "west_klant"):
-            return jsonify({"error": "Ongeldig template_key"}), 400
-
-        artikelen = data.get("artikelen", [])
-
-        job_id = str(uuid.uuid4())[:8]
-        pdf_path = OUTPUT_DIR / f"concept_{job_id}.pdf"
-
-        generator.generate_concept(
-            template_key=template_key,
-            artikelen=artikelen,
-            output_pdf_path=str(pdf_path),
-        )
-
-        label = {
-            "nl_zzp": "Concept ZZP NL", "west_zzp": "Concept ZZP West",
-            "nl_klant": "Concept Klant NL", "west_klant": "Concept Klant West",
-        }[template_key]
-
-        return send_file(
-            pdf_path,
-            mimetype="application/pdf",
-            as_attachment=True,
-            download_name=f"{label} - CONCEPT.pdf",
-        )
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
