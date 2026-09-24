@@ -448,10 +448,9 @@ def docx_to_pdf(docx_path, output_dir):
         pdfs = sorted(output_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
         if pdfs:
             return pdfs[0]
-        raise RuntimeError(
-            f"PDF-conversie mislukt voor '{docx_path.name}'. "
-            f"LibreOffice returncode={result.returncode}. "
-            f"stderr={result.stderr.decode(errors='replace')[:300]!r}"
+        raise FileNotFoundError(
+            f"PDF niet gevonden na conversie van {docx_path.name}. "
+            f"LibreOffice stdout: {result.stdout.decode(errors='replace')[:200]}"
         )
     return pdf_path
 
@@ -487,22 +486,12 @@ def format_kvk_or_regon(kvk):
 
 
 def build_filename(doc_type, entiteit, startdatum_iso, persnr, klantnaam, projectnr):
-    # Verwijder onveilige tekens
     klantnaam_clean = re.sub(r'[\\/:*?"<>|]', "", klantnaam).strip()
     projectnr_clean = re.sub(r'[\\/:*?"<>|]', "-", str(projectnr)).strip()
-
-    # Gebruik alleen JJJJ-MM-DD (al kort genoeg)
-    # Knip klantnaam af op 30 tekens om Windows padlengte-fouten te voorkomen
-    # (Windows limiet is 260 tekens; map + bestandsnaam + extensie telt mee)
-    klantnaam_short = klantnaam_clean[:30].strip()
-
     if doc_type == "zzp":
-        naam = f"{startdatum_iso} PO {persnr} - {klantnaam_short} {projectnr_clean}"
+        return f"{startdatum_iso} PO {persnr} - {klantnaam_clean} {projectnr_clean}"
     else:
-        naam = f"{startdatum_iso} PO {klantnaam_short} - {persnr} {projectnr_clean}"
-
-    # Knip het geheel af op 80 tekens (veilige marge voor Windows)
-    return naam[:80].strip()
+        return f"{startdatum_iso} PO {klantnaam_clean} - {persnr} {projectnr_clean}"
 
 
 def build_field_data(entiteit, monteur, klant, project, tekenbevoegde,
@@ -593,44 +582,33 @@ def generate_full_package(entiteit, monteurs, klant, project, tekenbevoegde,
 
     try:
         with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            errors = []
             for monteur in monteurs:
-                try:
-                    tarieven = tarieven_per_monteur.get(monteur["id"], {})
-                    zzp_data, klant_data = build_field_data(
-                        entiteit=entiteit, monteur=monteur, klant=klant, project=project,
-                        tekenbevoegde=tekenbevoegde, startdatum_nl=startdatum_nl,
-                        handtekendatum_nl=handtekendatum_nl,
-                        uurtarief_zzp=tarieven.get("zzp", ""),
-                        uurtarief_klant=tarieven.get("klant", ""),
-                        reisuur_tekst=tarieven.get("reisuur", ""),
-                        opdrachtomschrijving=opdrachtomschrijving,
-                    )
-                    persnr = monteur["persnr"]
-                    zzp_fn = build_filename("zzp", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
-                    kl_fn  = build_filename("klant", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
-                    zzp_docx = tmp_dir / f"{zzp_fn}.docx"
-                    kl_docx  = tmp_dir / f"{kl_fn}.docx"
-                    generate_docx(template_zzp_key, zzp_data, zzp_docx,
-                                  artikelen=zzp_artikelen if zzp_artikelen else None)
-                    generate_docx(template_klant_key, klant_data, kl_docx,
-                                  artikelen=kl_artikelen if kl_artikelen else None)
-                    zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
-                    kl_pdf  = docx_to_pdf(kl_docx, tmp_dir)
-                    prefix = f"{re.sub(r'[\\\\/:*?\"<>|\\x00-\\x1f]', ' ', monteur['naam']).strip()}/" if multi else ""
-                    zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
-                    zf.write(zzp_pdf,  f"{prefix}{zzp_fn}.pdf")
-                    zf.write(kl_docx,  f"{prefix}{kl_fn}.docx")
-                    zf.write(kl_pdf,   f"{prefix}{kl_fn}.pdf")
-                except Exception as monteur_err:
-                    errors.append(f"{monteur.get('naam', '?')}: {monteur_err}")
-            if errors and not any(True for _ in zf.infolist()):
-                # Alle monteurs faalden — gooi de fout op
-                raise RuntimeError("Generatie mislukt voor alle monteurs: " + "; ".join(errors))
-            if errors:
-                # Sommige monteurs faalden — schrijf foutlog in de ZIP
-                error_text = "\n".join(errors)
-                zf.writestr("FOUTEN.txt", f"De volgende overeenkomsten konden niet worden gegenereerd:\n\n{error_text}\n")
+                tarieven = tarieven_per_monteur.get(monteur["id"], {})
+                zzp_data, klant_data = build_field_data(
+                    entiteit=entiteit, monteur=monteur, klant=klant, project=project,
+                    tekenbevoegde=tekenbevoegde, startdatum_nl=startdatum_nl,
+                    handtekendatum_nl=handtekendatum_nl,
+                    uurtarief_zzp=tarieven.get("zzp", ""),
+                    uurtarief_klant=tarieven.get("klant", ""),
+                    reisuur_tekst=tarieven.get("reisuur", ""),
+                    opdrachtomschrijving=opdrachtomschrijving,
+                )
+                persnr = monteur["persnr"]
+                zzp_fn = build_filename("zzp", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
+                kl_fn  = build_filename("klant", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
+                zzp_docx = tmp_dir / f"{zzp_fn}.docx"
+                kl_docx  = tmp_dir / f"{kl_fn}.docx"
+                generate_docx(template_zzp_key, zzp_data, zzp_docx,
+                              artikelen=zzp_artikelen if zzp_artikelen else None)
+                generate_docx(template_klant_key, klant_data, kl_docx,
+                              artikelen=kl_artikelen if kl_artikelen else None)
+                zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
+                kl_pdf  = docx_to_pdf(kl_docx, tmp_dir)
+                prefix = f"{monteur['naam']}/" if multi else ""
+                zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
+                zf.write(zzp_pdf,  f"{prefix}{zzp_fn}.pdf")
+                zf.write(kl_docx,  f"{prefix}{kl_fn}.docx")
+                zf.write(kl_pdf,   f"{prefix}{kl_fn}.pdf")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return output_zip_path
