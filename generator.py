@@ -448,10 +448,9 @@ def docx_to_pdf(docx_path, output_dir):
         pdfs = sorted(output_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
         if pdfs:
             return pdfs[0]
-        raise RuntimeError(
-            f"PDF-conversie mislukt voor '{docx_path.name}'. "
-            f"LibreOffice returncode={result.returncode}. "
-            f"stderr={result.stderr.decode(errors='replace')[:300]!r}"
+        raise FileNotFoundError(
+            f"PDF niet gevonden na conversie van {docx_path.name}. "
+            f"LibreOffice stdout: {result.stdout.decode(errors='replace')[:200]}"
         )
     return pdf_path
 
@@ -487,22 +486,12 @@ def format_kvk_or_regon(kvk):
 
 
 def build_filename(doc_type, entiteit, startdatum_iso, persnr, klantnaam, projectnr):
-    # Verwijder onveilige tekens
     klantnaam_clean = re.sub(r'[\\/:*?"<>|]', "", klantnaam).strip()
     projectnr_clean = re.sub(r'[\\/:*?"<>|]', "-", str(projectnr)).strip()
-
-    # Gebruik alleen JJJJ-MM-DD (al kort genoeg)
-    # Knip klantnaam af op 30 tekens om Windows padlengte-fouten te voorkomen
-    # (Windows limiet is 260 tekens; map + bestandsnaam + extensie telt mee)
-    klantnaam_short = klantnaam_clean[:30].strip()
-
     if doc_type == "zzp":
-        naam = f"{startdatum_iso} PO {persnr} - {klantnaam_short} {projectnr_clean}"
+        return f"{startdatum_iso} PO {persnr} - {klantnaam_clean} {projectnr_clean}"
     else:
-        naam = f"{startdatum_iso} PO {klantnaam_short} - {persnr} {projectnr_clean}"
-
-    # Knip het geheel af op 80 tekens (veilige marge voor Windows)
-    return naam[:80].strip()
+        return f"{startdatum_iso} PO {klantnaam_clean} - {persnr} {projectnr_clean}"
 
 
 def build_field_data(entiteit, monteur, klant, project, tekenbevoegde,
@@ -593,186 +582,33 @@ def generate_full_package(entiteit, monteurs, klant, project, tekenbevoegde,
 
     try:
         with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            errors = []
             for monteur in monteurs:
-                try:
-                    tarieven = tarieven_per_monteur.get(monteur["id"], {})
-                    zzp_data, klant_data = build_field_data(
-                        entiteit=entiteit, monteur=monteur, klant=klant, project=project,
-                        tekenbevoegde=tekenbevoegde, startdatum_nl=startdatum_nl,
-                        handtekendatum_nl=handtekendatum_nl,
-                        uurtarief_zzp=tarieven.get("zzp", ""),
-                        uurtarief_klant=tarieven.get("klant", ""),
-                        reisuur_tekst=tarieven.get("reisuur", ""),
-                        opdrachtomschrijving=opdrachtomschrijving,
-                    )
-                    persnr = monteur["persnr"]
-                    zzp_fn = build_filename("zzp", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
-                    kl_fn  = build_filename("klant", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
-                    zzp_docx = tmp_dir / f"{zzp_fn}.docx"
-                    kl_docx  = tmp_dir / f"{kl_fn}.docx"
-                    generate_docx(template_zzp_key, zzp_data, zzp_docx,
-                                  artikelen=zzp_artikelen if zzp_artikelen else None)
-                    generate_docx(template_klant_key, klant_data, kl_docx,
-                                  artikelen=kl_artikelen if kl_artikelen else None)
-                    zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
-                    kl_pdf  = docx_to_pdf(kl_docx, tmp_dir)
-                    prefix = f"{re.sub(r'[\\\\/:*?\"<>|\\x00-\\x1f]', ' ', monteur['naam']).strip()}/" if multi else ""
-                    zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
-                    zf.write(zzp_pdf,  f"{prefix}{zzp_fn}.pdf")
-                    zf.write(kl_docx,  f"{prefix}{kl_fn}.docx")
-                    zf.write(kl_pdf,   f"{prefix}{kl_fn}.pdf")
-                except Exception as monteur_err:
-                    errors.append(f"{monteur.get('naam', '?')}: {monteur_err}")
-            if errors and not any(True for _ in zf.infolist()):
-                # Alle monteurs faalden — gooi de fout op
-                raise RuntimeError("Generatie mislukt voor alle monteurs: " + "; ".join(errors))
-            if errors:
-                # Sommige monteurs faalden — schrijf foutlog in de ZIP
-                error_text = "\n".join(errors)
-                zf.writestr("FOUTEN.txt", f"De volgende overeenkomsten konden niet worden gegenereerd:\n\n{error_text}\n")
+                tarieven = tarieven_per_monteur.get(monteur["id"], {})
+                zzp_data, klant_data = build_field_data(
+                    entiteit=entiteit, monteur=monteur, klant=klant, project=project,
+                    tekenbevoegde=tekenbevoegde, startdatum_nl=startdatum_nl,
+                    handtekendatum_nl=handtekendatum_nl,
+                    uurtarief_zzp=tarieven.get("zzp", ""),
+                    uurtarief_klant=tarieven.get("klant", ""),
+                    reisuur_tekst=tarieven.get("reisuur", ""),
+                    opdrachtomschrijving=opdrachtomschrijving,
+                )
+                persnr = monteur["persnr"]
+                zzp_fn = build_filename("zzp", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
+                kl_fn  = build_filename("klant", entiteit, startdatum_iso, persnr, klant["naam"], project["nr"])
+                zzp_docx = tmp_dir / f"{zzp_fn}.docx"
+                kl_docx  = tmp_dir / f"{kl_fn}.docx"
+                generate_docx(template_zzp_key, zzp_data, zzp_docx,
+                              artikelen=zzp_artikelen if zzp_artikelen else None)
+                generate_docx(template_klant_key, klant_data, kl_docx,
+                              artikelen=kl_artikelen if kl_artikelen else None)
+                zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
+                kl_pdf  = docx_to_pdf(kl_docx, tmp_dir)
+                prefix = f"{monteur['naam']}/" if multi else ""
+                zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
+                zf.write(zzp_pdf,  f"{prefix}{zzp_fn}.pdf")
+                zf.write(kl_docx,  f"{prefix}{kl_fn}.docx")
+                zf.write(kl_pdf,   f"{prefix}{kl_fn}.pdf")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return output_zip_path
-
-
-def inject_concept_watermerk(xml_content):
-    """
-    Voeg een diagonaal CONCEPT-watermerk toe aan elke pagina van het document.
-    Implementatie via een WordprocessingML sectie-header met een tekstwatermerk
-    (w:sdt met art. w:watermark via w:rPr rotation), of eenvoudiger: we voegen
-    een sdtPr met een shape in via de sectPr-header referentie.
-
-    Eenvoudigste betrouwbare aanpak die in zowel Word als LibreOffice werkt:
-    voeg een vml:shape toe aan de header van het document met CONCEPT-tekst
-    diagonaal geroteerd.
-    """
-    # Controleer of er al een header-referentie is
-    header_ref = re.search(r'<w:headerReference[^/]*/>', xml_content)
-    if not header_ref:
-        return xml_content  # Geen header aanwezig, watermerk overslaan
-
-    return xml_content
-
-
-def inject_watermerk_in_header(work_unpack_dir):
-    """
-    Injecteer een CONCEPT-watermerk in de Word header-bestanden van het document.
-    Het watermerk is een diagonale rode tekst die over elke pagina staat.
-    Werkt door de bestaande header-XML aan te passen.
-    """
-    word_dir = work_unpack_dir / "word"
-    # Zoek alle header-bestanden
-    header_files = list(word_dir.glob("header*.xml"))
-
-    watermerk_shape = (
-        '<w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr>'
-        '<w:r><w:rPr>'
-        '<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>'
-        '<w:b/>'
-        '<w:color w:val="AAAAAA"/>'
-        '<w:sz w:val="144"/>'
-        '<w:szCs w:val="144"/>'
-        '</w:rPr>'
-        '<w:t>CONCEPT</w:t></w:r></w:p>'
-    )
-
-    # Als er geen header-bestanden zijn, maak er een aan
-    if not header_files:
-        # Maak header1.xml aan
-        header_xml = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<w:hdr xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" '
-            'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
-            'xmlns:o="urn:schemas-microsoft-com:office:office" '
-            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
-            'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
-            'xmlns:v="urn:schemas-microsoft-com:vml" '
-            'xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" '
-            'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
-            'xmlns:w10="urn:schemas-microsoft-com:office:word" '
-            'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-            'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
-            'xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" '
-            'xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" '
-            'xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" '
-            'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" '
-            'mc:Ignorable="w14 wp14">'
-            + watermerk_shape +
-            '</w:hdr>'
-        )
-        header_path = word_dir / "header1.xml"
-        with open(header_path, "w", encoding="utf-8") as f:
-            f.write(header_xml)
-        return
-
-    for header_path in header_files:
-        with open(header_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        # Voeg watermerk in vóór de afsluitende </w:hdr> tag
-        content = content.replace("</w:hdr>", watermerk_shape + "</w:hdr>")
-        with open(header_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-
-def generate_concept(template_key, artikelen, output_pdf_path):
-    """
-    Genereer een concept-overeenkomst: lege overeenkomst met alle juridische tekst
-    maar zonder klant-/monteurgegevens. Voeg CONCEPT-watermerk toe.
-    """
-    import time
-    sdt_map = SDT_MAPS[template_key]
-    job_id = f"{os.getpid()}_{int(time.time())}"
-    work_unpack = WORK_DIR / f"concept_unpack_{job_id}"
-    tmp_docx = WORK_DIR / f"concept_{job_id}.docx"
-
-    try:
-        # 1. Unpack template
-        template_path = TEMPLATES_DIR / TEMPLATE_FILES[template_key]
-        unpack_docx(template_path, work_unpack)
-
-        # 2. Handtekening injecteren
-        entiteit = "west" if template_key.startswith("west") else "nl"
-        inject_signature_image(work_unpack, entiteit)
-
-        # 3. Lees document XML
-        doc_xml_path = work_unpack / "word" / "document.xml"
-        with open(doc_xml_path, "r", encoding="utf-8") as f:
-            xml_content = f.read()
-
-        # 4. Vul alle SDT-velden met lege strings
-        for idx in sorted(sdt_map.keys(), reverse=True):
-            blocks = find_balanced_sdt_blocks(xml_content)
-            xml_content = fill_sdt_content(xml_content, idx, "", blocks_cache=blocks, font_size=14)
-
-        # 5. Compacteer datatabel voor klant-types
-        xml_content = compact_datatabel(xml_content, template_key)
-
-        # 6. Injecteer artikelen
-        if artikelen:
-            xml_content = inject_artikelen(xml_content, artikelen, template_key)
-
-        # 7. Schrijf terug
-        with open(doc_xml_path, "w", encoding="utf-8") as f:
-            f.write(xml_content)
-
-        # 8. CONCEPT-watermerk in headers
-        inject_watermerk_in_header(work_unpack)
-
-        # 9. Pak docx samen
-        pack_docx(work_unpack, tmp_docx)
-
-        # 10. Converteer naar PDF direct naar output locatie
-        output_dir = Path(output_pdf_path).parent
-        pdf = docx_to_pdf(tmp_docx, output_dir)
-
-        # 11. Hernoem naar gewenste output pad
-        if str(pdf) != str(output_pdf_path):
-            shutil.move(str(pdf), str(output_pdf_path))
-
-        return output_pdf_path
-
-    finally:
-        shutil.rmtree(work_unpack, ignore_errors=True)
-        if tmp_docx.exists():
-            tmp_docx.unlink(missing_ok=True)
