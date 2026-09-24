@@ -719,60 +719,60 @@ def generate_concept(template_key, artikelen, output_pdf_path):
     """
     Genereer een concept-overeenkomst: lege overeenkomst met alle juridische tekst
     maar zonder klant-/monteurgegevens. Voeg CONCEPT-watermerk toe.
-
-    template_key: 'nl_zzp', 'west_zzp', 'nl_klant', 'west_klant'
-    artikelen: lijst van artikel-dicts (standaard of klant-specifiek)
-    output_pdf_path: pad voor de output PDF
     """
-    template_path = TEMPLATES_DIR / TEMPLATE_FILES[template_key]
+    import time
     sdt_map = SDT_MAPS[template_key]
+    job_id = f"{os.getpid()}_{int(time.time())}"
+    work_unpack = WORK_DIR / f"concept_unpack_{job_id}"
+    tmp_docx = WORK_DIR / f"concept_{job_id}.docx"
 
-    work_unpack = WORK_DIR / f"concept_{template_key}_{os.getpid()}"
-    unpack_docx(template_path, work_unpack)
+    try:
+        # 1. Unpack template
+        template_path = TEMPLATES_DIR / TEMPLATE_FILES[template_key]
+        unpack_docx(template_path, work_unpack)
 
-    # Injecteer handtekening
-    entiteit = "west" if template_key.startswith("west") else "nl"
-    inject_signature_image(work_unpack, entiteit)
+        # 2. Handtekening injecteren
+        entiteit = "west" if template_key.startswith("west") else "nl"
+        inject_signature_image(work_unpack, entiteit)
 
-    # Lege placeholder data — geen echte gegevens
-    lege_data = {field: "" for field in set(sdt_map.values())}
+        # 3. Lees document XML
+        doc_xml_path = work_unpack / "word" / "document.xml"
+        with open(doc_xml_path, "r", encoding="utf-8") as f:
+            xml_content = f.read()
 
-    doc_xml_path = work_unpack / "word" / "document.xml"
-    with open(doc_xml_path, "r", encoding="utf-8") as f:
-        xml_content = f.read()
+        # 4. Vul alle SDT-velden met lege strings
+        for idx in sorted(sdt_map.keys(), reverse=True):
+            blocks = find_balanced_sdt_blocks(xml_content)
+            xml_content = fill_sdt_content(xml_content, idx, "", blocks_cache=blocks, font_size=14)
 
-    # Vul alle SDT-velden met lege strings
-    for idx in sorted(sdt_map.keys(), reverse=True):
-        blocks = find_balanced_sdt_blocks(xml_content)
-        xml_content = fill_sdt_content(xml_content, idx, "", blocks_cache=blocks, font_size=14)
+        # 5. Compacteer datatabel voor klant-types
+        xml_content = compact_datatabel(xml_content, template_key)
 
-    # Compacteer datatabel + pageBreakBefore voor klant-types
-    xml_content = compact_datatabel(xml_content, template_key)
+        # 6. Injecteer artikelen
+        if artikelen:
+            xml_content = inject_artikelen(xml_content, artikelen, template_key)
 
-    # Injecteer artikelen als die meegegeven zijn
-    if artikelen:
-        xml_content = inject_artikelen(xml_content, artikelen, template_key)
+        # 7. Schrijf terug
+        with open(doc_xml_path, "w", encoding="utf-8") as f:
+            f.write(xml_content)
 
-    with open(doc_xml_path, "w", encoding="utf-8") as f:
-        f.write(xml_content)
+        # 8. CONCEPT-watermerk in headers
+        inject_watermerk_in_header(work_unpack)
 
-    # Injecteer CONCEPT-watermerk in de headers
-    inject_watermerk_in_header(work_unpack)
+        # 9. Pak docx samen
+        pack_docx(work_unpack, tmp_docx)
 
-    # Pak de docx terug samen
-    tmp_docx = WORK_DIR / f"concept_{template_key}_{os.getpid()}.docx"
-    pack_docx(work_unpack, tmp_docx)
-    shutil.rmtree(work_unpack, ignore_errors=True)
+        # 10. Converteer naar PDF direct naar output locatie
+        output_dir = Path(output_pdf_path).parent
+        pdf = docx_to_pdf(tmp_docx, output_dir)
 
-    # Converteer naar PDF
-    output_dir = Path(output_pdf_path).parent
-    pdf = docx_to_pdf(tmp_docx, output_dir)
+        # 11. Hernoem naar gewenste output pad
+        if str(pdf) != str(output_pdf_path):
+            shutil.move(str(pdf), str(output_pdf_path))
 
-    # Hernoem naar gewenste naam
-    if str(pdf) != str(output_pdf_path):
-        shutil.move(str(pdf), str(output_pdf_path))
+        return output_pdf_path
 
-    # Verwijder de tijdelijke docx
-    tmp_docx.unlink(missing_ok=True)
-
-    return output_pdf_path
+    finally:
+        shutil.rmtree(work_unpack, ignore_errors=True)
+        if tmp_docx.exists():
+            tmp_docx.unlink(missing_ok=True)
