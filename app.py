@@ -278,13 +278,31 @@ def datum_aanpassen():
                     nieuwe_handteken=nieuwe_handteken,
                 )
 
+                # Bepaal de nieuwe bestandsnaam — vervang de datum in de naam
+                # als er een nieuwe startdatum is (DD-MM-YYYY → YYYY-MM-DD voor bestandsnaam)
+                nieuwe_naam_stem = docx_path.stem
+                if nieuwe_start:
+                    try:
+                        dag, mnd, jaar = nieuwe_start.split('-')
+                        nieuwe_iso = f"{jaar}-{mnd}-{dag}"
+                        import re as _re
+                        nieuwe_naam_stem = _re.sub(r'^\d{4}-\d{2}-\d{2}', nieuwe_iso, nieuwe_naam_stem)
+                    except Exception:
+                        pass  # bestandsnaam ongewijzigd als de datum niet parseerbaar is
+
+                # Hernoem het docx bestand naar de nieuwe naam
+                from pathlib import Path as _Path
+                nieuwe_docx = tmp_dir / f"{nieuwe_naam_stem}.docx"
+                if nieuwe_docx != docx_path:
+                    docx_path.rename(nieuwe_docx)
+                    docx_path = nieuwe_docx
+
                 # Converteer naar PDF
                 pdf = generator.docx_to_pdf(docx_path, tmp_dir)
 
                 # Voeg beide toe aan ZIP
-                stem = docx_path.stem
-                zf.write(docx_path, f"{stem}.docx")
-                zf.write(pdf, f"{stem}.pdf")
+                zf.write(docx_path, f"{nieuwe_naam_stem}.docx")
+                zf.write(pdf, f"{nieuwe_naam_stem}.pdf")
 
         zip_buf.seek(0)
         import shutil
