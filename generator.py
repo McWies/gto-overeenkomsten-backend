@@ -617,7 +617,8 @@ def generate_full_package(entiteit, monteurs, klant, project, tekenbevoegde,
                                   artikelen=kl_artikelen if kl_artikelen else None)
                     zzp_pdf = docx_to_pdf(zzp_docx, tmp_dir)
                     kl_pdf  = docx_to_pdf(kl_docx, tmp_dir)
-                    prefix = f"{re.sub(r'[\\\\/:*?\"<>|\\x00-\\x1f]', ' ', monteur['naam']).strip()}/" if multi else ""
+                    naam_clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', monteur['naam']).strip()
+                    prefix = f"{naam_clean}/" if multi else ""
                     zf.write(zzp_docx, f"{prefix}{zzp_fn}.docx")
                     zf.write(zzp_pdf,  f"{prefix}{zzp_fn}.pdf")
                     zf.write(kl_docx,  f"{prefix}{kl_fn}.docx")
