@@ -11,6 +11,7 @@ Endpoints:
 
 import os
 import uuid
+import zipfile
 import tempfile
 from pathlib import Path
 from flask import Flask, request, send_file, jsonify
@@ -170,6 +171,130 @@ def generate():
             mimetype="application/zip",
             as_attachment=True,
             download_name=download_name,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/concept", methods=["POST"])
+def concept():
+    """
+    Genereer een concept-overeenkomst: leeg document met alle juridische tekst
+    maar zonder klant-/monteurgegevens. Met CONCEPT-watermerk.
+
+    Verwacht JSON:
+    {
+      "template_key": "nl_zzp" | "west_zzp" | "nl_klant" | "west_klant",
+      "artikelen": [...]   // optioneel, standaard of klant-specifiek
+    }
+    Retourneert: PDF-bestand
+    """
+    try:
+        data = request.get_json(force=True)
+        template_key = data.get("template_key")
+        if template_key not in ("nl_zzp", "west_zzp", "nl_klant", "west_klant"):
+            return jsonify({"error": "Ongeldig template_key"}), 400
+
+        artikelen = data.get("artikelen", [])
+
+        job_id = str(uuid.uuid4())[:8]
+        pdf_path = OUTPUT_DIR / f"concept_{job_id}.pdf"
+
+        generator.generate_concept(
+            template_key=template_key,
+            artikelen=artikelen,
+            output_pdf_path=str(pdf_path),
+        )
+
+        label = {
+            "nl_zzp": "Concept ZZP NL", "west_zzp": "Concept ZZP West",
+            "nl_klant": "Concept Klant NL", "west_klant": "Concept Klant West",
+        }[template_key]
+
+        return send_file(
+            pdf_path,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"{label} - CONCEPT.pdf",
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/datum-aanpassen", methods=["POST"])
+def datum_aanpassen():
+    """
+    Ontvang één of meerdere .docx bestanden via multipart/form-data,
+    pas de datums aan, en stuur een ZIP terug met per bestand een .docx en .pdf.
+
+    Form fields:
+      files: meerdere .docx bestanden
+      startdatum_<n>: nieuwe startdatum voor bestand n (DD-MM-YYYY), optioneel
+      handtekendatum_<n>: nieuwe handtekendatum voor bestand n (DD-MM-YYYY), optioneel
+      type_<n>: 'zzp' of 'klant' voor bestand n
+    """
+    import io
+
+    DATUM_SDT_MAP = {
+        'zzp':   {'startdatum': 14, 'handtekendatum': 18},
+        'klant': {'startdatum': 19, 'handtekendatum': 26},
+    }
+
+    try:
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({"error": "Geen bestanden ontvangen"}), 400
+
+        job_id = str(uuid.uuid4())[:8]
+        tmp_dir = OUTPUT_DIR / f"datum_{job_id}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for n, f in enumerate(files):
+                naam = f.filename
+                doc_type = request.form.get(f'type_{n}', 'klant')
+                nieuwe_start = request.form.get(f'startdatum_{n}', '').strip()
+                nieuwe_handteken = request.form.get(f'handtekendatum_{n}', '').strip()
+
+                indices = DATUM_SDT_MAP.get(doc_type, DATUM_SDT_MAP['klant'])
+
+                # Sla het originele docx op
+                docx_path = tmp_dir / naam
+                f.save(str(docx_path))
+
+                # Pas datums aan via generator helper
+                generator.pas_datum_aan_in_docx(
+                    docx_path=str(docx_path),
+                    startdatum_idx=indices['startdatum'],
+                    handtekendatum_idx=indices['handtekendatum'],
+                    nieuwe_start=nieuwe_start,
+                    nieuwe_handteken=nieuwe_handteken,
+                )
+
+                # Converteer naar PDF
+                pdf = generator.docx_to_pdf(docx_path, tmp_dir)
+
+                # Voeg beide toe aan ZIP
+                stem = docx_path.stem
+                zf.write(docx_path, f"{stem}.docx")
+                zf.write(pdf, f"{stem}.pdf")
+
+        zip_buf.seek(0)
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return send_file(
+            zip_buf,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f'Overeenkomsten_datum_aangepast_{job_id}.zip',
         )
 
     except Exception as e:
