@@ -487,22 +487,14 @@ def format_kvk_or_regon(kvk):
 
 
 def build_filename(doc_type, entiteit, startdatum_iso, persnr, klantnaam, projectnr):
-    # Verwijder onveilige tekens
+    # Verwijder onveilige tekens (schuine strepen, aanhalingstekens etc.)
     klantnaam_clean = re.sub(r'[\\/:*?"<>|]', "", klantnaam).strip()
     projectnr_clean = re.sub(r'[\\/:*?"<>|]', "-", str(projectnr)).strip()
 
-    # Gebruik alleen JJJJ-MM-DD (al kort genoeg)
-    # Knip klantnaam af op 30 tekens om Windows padlengte-fouten te voorkomen
-    # (Windows limiet is 260 tekens; map + bestandsnaam + extensie telt mee)
-    klantnaam_short = klantnaam_clean[:30].strip()
-
     if doc_type == "zzp":
-        naam = f"{startdatum_iso} PO {persnr} - {klantnaam_short} {projectnr_clean}"
+        return f"{startdatum_iso} PO {persnr} - {klantnaam_clean} {projectnr_clean}"
     else:
-        naam = f"{startdatum_iso} PO {klantnaam_short} - {persnr} {projectnr_clean}"
-
-    # Knip het geheel af op 80 tekens (veilige marge voor Windows)
-    return naam[:80].strip()
+        return f"{startdatum_iso} PO {klantnaam_clean} - {persnr} {projectnr_clean}"
 
 
 def build_field_data(entiteit, monteur, klant, project, tekenbevoegde,
